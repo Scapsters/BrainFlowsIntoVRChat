@@ -6,10 +6,12 @@ import math
 import numpy as np
 
 from brainflow.board_shim import BoardShim, BrainFlowInputParams, LogLevels, BoardIds
-from brainflow.data_filter import DataFilter, DetrendOperations, FilterTypes
+from brainflow.data_filter import DataFilter, DetrendOperations, FilterTypes, NoiseTypes
 
 from pythonosc.udp_client import SimpleUDPClient
 from scipy.signal import find_peaks
+
+from hexVisualThread import hexVisualThread
 
 
 class BAND_POWERS(enum.IntEnum):
@@ -53,7 +55,7 @@ def main():
     DataFilter.enable_data_logger()
 
     ### Uncomment this to see debug messages ###
-    # BoardShim.set_log_level(LogLevels.LEVEL_DEBUG.value)
+    BoardShim.set_log_level(LogLevels.LEVEL_DEBUG.value)
 
     ### Paramater Setting ###
     parser = argparse.ArgumentParser()
@@ -140,7 +142,13 @@ def main():
     startup_time = 5
     board_timeout = 5
 
+    ### Visualizer thread ###
+    t = hexVisualThread()
+
     try:
+        # Start Visualizer on a different thread
+        t.start()
+
         BoardShim.log_message(LogLevels.LEVEL_INFO.value, 'Intializing')
         board.start_stream(ring_buffer_size, args.streamer_params)
         time.sleep(startup_time)
@@ -167,10 +175,15 @@ def main():
             ### START EEG SECTION ###
             BoardShim.log_message(
                 LogLevels.LEVEL_DEBUG.value, "Calculating Power Bands")
-            if detrend_eeg:
-                for eeg_channel in eeg_channels:
+
+            # Clean Signals
+            for eeg_channel in eeg_channels:
+                DataFilter.remove_environmental_noise(data[eeg_channel],
+                                                      BoardShim.get_sampling_rate(master_board_id), NoiseTypes.FIFTY_AND_SIXTY.value)
+                if detrend_eeg:
                     DataFilter.detrend(data[eeg_channel],
                                        DetrendOperations.LINEAR)
+
             bands = DataFilter.get_avg_band_powers(
                 data, eeg_channels, sampling_rate, True)
             feature_vector, _ = bands
@@ -189,6 +202,10 @@ def main():
 
             current_focus = current_value[0]
             current_relax = current_value[1]
+
+            # Update Visuals
+            visual_alpha = (current_focus + 1)/2
+            t.update_alpha(visual_alpha * visual_alpha)
 
             BoardShim.log_message(LogLevels.LEVEL_DEBUG.value, "Focus: {:.3f}\tRelax: {:.3f}".format(
                 current_focus, current_relax))
