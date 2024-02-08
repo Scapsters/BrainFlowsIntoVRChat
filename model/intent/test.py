@@ -15,15 +15,17 @@ import pickle
 
 from train import extract_features, preprocess_data
 
+import tensorflow as tf
+
 window_seconds = 1
 
 def main():
     ## Load model dictionary and extract models
-    with open("models.ml", "rb") as f:
+    with open("model_dict.pkl", "rb") as f:
         model_dict = pickle.load(f)
     feature_scaler = model_dict["feature_scaler"]
     feature_pca = model_dict["feature_pca"]
-    classifier = model_dict["svm"]
+    gru_model = tf.keras.models.load_model('gru_model.keras')
 
     parser = argparse.ArgumentParser()
     # use docs to check which parameters are required for specific board, e.g. for Cyton - set serial port
@@ -60,7 +62,6 @@ def main():
 
     sampling_rate = BoardShim.get_sampling_rate(args.board_id)
     eeg_channels = BoardShim.get_eeg_channels(args.board_id)
-    time_channel = BoardShim.get_timestamp_channel(args.board_id)
     sampling_size = sampling_rate * window_seconds
 
     board.prepare_session()
@@ -74,17 +75,19 @@ def main():
     while True:
         data = board.get_current_board_data(sampling_size)
 
-        ## timeout check
-        time_data = data[time_channel]
-        if time_data[0] == time_data[-1]:
-            raise TimeoutError("Board Timed Out")
-
         eeg_data = data[eeg_channels]
         pp_data = preprocess_data(eeg_data, sampling_rate)
         ft_data = extract_features(pp_data)
         scaled_features = feature_scaler.transform([ft_data])
         fitted_features = feature_pca.transform(scaled_features)
-        pred_string = classifier.predict(fitted_features)[0]
+
+        gru_input = fitted_features.reshape((1, -1, fitted_features.shape[1]))
+
+        pred_probabilities = gru_model.predict(gru_input, verbose=0)
+        pred_label = np.argmax(pred_probabilities, axis=1)
+        # Convert the numerical label to a string if needed
+        pred_string = 'button' if pred_label[0] == 1 else 'baseline'
+
 
         target_value = 1.0 if pred_string == 'button' else 0.0
         ema_value = 0.05
